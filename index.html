@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>小四门刷题 · 七年级学霸笔记</title>
+<meta name="description" content="七年级小四门（地理/历史/生物）学霸笔记划重点刷题与错题本。纯前端、免注册、离线可用，数据只存本机。" />
+<link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <!--
+    小四门刷题（单用户·孩子本人）
+    - 纯前端零依赖：双击本文件即可使用（file://），不发任何网络请求。
+    - 题库内嵌于 js/data/seed-questions.js（window.XBJ_SEED），
+      只有 reviewStatus/reviewState === 'book_checked' 的题会进入练习池（见 js/app.js getPool）。
+    - 用户数据：错题本/设置 → localStorage（xbj.v1.*，按科隔离）；
+      作答流水/练习汇总 → IndexedDB（库 xbj-v1）。见 js/storage.js 顶部注释。
+    - 内容仅家庭自用，不对外分发。
+  -->
+  <main id="app">
+    <div id="view" aria-live="polite"><div class="empty">载入中…</div></div>
+  </main>
+
+  <nav id="bottomNav" aria-label="主导航">
+    <div class="nav-inner">
+      <button class="nav-btn" data-nav="home"><span class="nav-ico">▦</span>选科目</button>
+      <button class="nav-btn" data-nav="wrong"><span class="nav-ico">✎</span>错题本</button>
+      <button class="nav-btn" data-nav="settings"><span class="nav-ico">⚙</span>设置</button>
+    </div>
+  </nav>
+
+  <div id="toast" role="status"></div>
+
+  <!-- 顺序加载：数据 → 存储 → 应用（普通 script，file:// 下不可用 ES module） -->
+  <script src="js/data/seed-questions.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

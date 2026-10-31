@@ -1,0 +1,11 @@
+# 发布副本忽略项（仅本目录使用）
+_pages/
+*.heic
+*.HEIC
+*.jpg
+*.jpeg
+*.png
+*.pdf
+*.docx
+.DS_Store
+Thumbs.db
