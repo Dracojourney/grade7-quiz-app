@@ -4,16 +4,23 @@
  * 页面：P01 选科目 #/ | P02 书章选择 #/c/{subj} | P03 答题卡 #/quiz
  *       P04 错题本 #/wrong[/{subj}] | P05 设置 #/settings
  *
- * 入池红线：getPool() 只返回 reviewStatus/reviewState === 'book_checked'
- * 且 example !== true 的题。pending_book_check（web 来源 keypoint）的题
- * 即使已加载到 window.XBJ_SEED，也绝不出给学生——不要在任何界面绕过此函数。
+ * 入池规则（2026-10-31 用户授权变更）：getPool() 接受
+ *   reviewStatus/reviewState ∈ { book_checked, book_transcribed }
+ * 且 needsFigure !== true、example !== true 的题。依据：用户 2026-10-31 决定
+ * 「先不抽检、尽快用上这批依书页生成的题」，界面用「AI 依书页生成 · 待抽检」
+ * 角标明示；needsFigure（缺配图）与 pending_book_check（web 来源）仍一律排除。
+ * 恢复严格模式只需把 POOL_STATUSES 改回 ['book_checked']。
+ * getPool() 仍是唯一入池入口，不要在任何界面绕过。
  * ==========================================================================*/
 (function () {
   'use strict';
 
   var SEED = window.XBJ_SEED;
   var DB = window.XBJStorage;
-  var TYPE_NAMES = { single_choice: '单选', true_false: '判断', fill_blank: '填空' };
+  var TYPE_NAMES = {
+    single_choice: '单选', true_false: '判断', fill_blank: '填空',
+    ordering: '排序', matching: '匹配'
+  };
   var DIFF_NAMES = { 1: '基础', 2: '提升', 3: '挑战' };
   var ORIGIN_NAMES = { book: '书内', web: '网络' };
 
@@ -56,13 +63,17 @@
     for (var i = 0; i < SEED.QUESTIONS.length; i++) if (SEED.QUESTIONS[i].id === id) return SEED.QUESTIONS[i];
     return null;
   }
-  /* ★ 唯一入池口：只有 book_checked 的书内题可出给学生（红线，勿绕过） */
+  /* ★ 唯一入池口（2026-10-31 用户授权：未抽检先用，见文件头说明） */
+  var POOL_STATUSES = ['book_checked', 'book_transcribed'];
+  function isPoolable(q) {
+    if (!q || q.example === true) return false;
+    if (q.needsFigure === true) return false;
+    var st = q.reviewStatus || q.reviewState;
+    return POOL_STATUSES.indexOf(st) >= 0;
+  }
   function getPool(subj) {
     return SEED.QUESTIONS.filter(function (q) {
-      if (q.example === true) return false;
-      var ok = (q.reviewStatus === 'book_checked' || q.reviewState === 'book_checked');
-      if (!ok) return false;
-      return subj ? q.subject === subj : true;
+      return isPoolable(q) && (subj ? q.subject === subj : true);
     });
   }
   function poolCount(subj, chapterId, sectionId) {
@@ -71,6 +82,46 @@
       if (sectionId && q.bookSectionId !== sectionId) return false;
       return true;
     }).length;
+  }
+  /* 该节/章的书内题量（含 needsFigure、只算入池状态），用于区分「缺配图」与「待录入」 */
+  function rawCount(subj, chapterId, sectionId) {
+    return SEED.QUESTIONS.filter(function (q) {
+      if (q.example === true || q.contentOrigin === 'web') return false;
+      if (POOL_STATUSES.indexOf(q.reviewStatus || q.reviewState) < 0) return false;
+      if (q.subject !== subj) return false;
+      if (chapterId && q.bookChapterId !== chapterId) return false;
+      if (sectionId && q.bookSectionId !== sectionId) return false;
+      return true;
+    }).length;
+  }
+  /* 单科统计：可用（入池）/ 待抽检 / 缺配图（书内 needsFigure）/ 已核对 */
+  function reviewStat(subj) {
+    var pool = getPool(subj);
+    var checked = pool.filter(function (q) {
+      return (q.reviewStatus || q.reviewState) === 'book_checked';
+    }).length;
+    var missingFigure = SEED.QUESTIONS.filter(function (q) {
+      return q.subject === subj && q.needsFigure === true && q.example !== true;
+    }).length;
+    return {
+      available: pool.length,
+      pending: pool.length - checked,
+      missingFigure: missingFigure,
+      checked: checked
+    };
+  }
+  /* 首页说明：按真实可用题量动态生成，不写死某一章 */
+  function homeNote() {
+    var geo = poolCount('geo'), bio = poolCount('bio'), hist = poolCount('hist');
+    var parts = [];
+    if (geo) parts.push('地理 ' + geo + ' 道');
+    if (hist) parts.push('历史 ' + hist + ' 道');
+    if (bio) parts.push('生物 ' + bio + ' 道');
+    var head = parts.length
+      ? '当前可用 ' + parts.join('、') + '（按学霸笔记书页内容生成）。'
+      : '当前还没有可用题目。';
+    return head +
+      '题卡会标注来源：已对照书本核对的显示「已核对」，AI 依书页生成、尚未人工抽检的显示「AI 依书页 Pxx 生成 · 待抽检」。';
   }
   function toast(msg) {
     var t = $('#toast');
@@ -120,11 +171,32 @@
   }
 
   /* ---------------- 判定 ---------------- */
+  function optionTextOf(q, key) {
+    var opt = (q.options || []).filter(function (o) { return o.key === key; })[0];
+    return opt ? opt.text : key;
+  }
+  function expectedRight(q, leftKey) {
+    var p = (q.answer.pairs || []).filter(function (x) { return x.left === leftKey; })[0];
+    return p ? p.right : null;
+  }
   function judge(q, given) {
     var correct;
-    if (q.type === 'single_choice') correct = (given === q.answer.value);
-    else if (q.type === 'true_false') correct = (given === q.answer.value);
-    else correct = q.answer.accept.some(function (a) { return norm(a) === norm(given); });
+    if (q.type === 'single_choice' || q.type === 'true_false') {
+      correct = (given === q.answer.value);
+    } else if (q.type === 'fill_blank') {
+      correct = q.answer.accept.some(function (a) { return norm(a) === norm(given); });
+    } else if (q.type === 'ordering') {
+      correct = String(given) === (q.answer.sequence || []).join('');
+    } else if (q.type === 'matching') {
+      var map = {};
+      String(given).split(',').forEach(function (p) {
+        var kv = p.split('-');
+        if (kv[0]) map[kv[0]] = kv[1];
+      });
+      correct = (q.answer.pairs || []).every(function (p) { return map[p.left] === p.right; });
+    } else {
+      correct = false;
+    }
 
     var seconds = Math.max(1, Math.round((Date.now() - S.qStartAt) / 1000));
     DB.addAttempt({
@@ -145,19 +217,40 @@
   }
   function correctAnswerText(q) {
     if (q.type === 'single_choice') {
-      var opt = q.options.filter(function (o) { return o.key === q.answer.value; })[0];
-      return q.answer.value + '. ' + (opt ? opt.text : '');
+      return q.answer.value + '. ' + optionTextOf(q, q.answer.value);
     }
     if (q.type === 'true_false') return q.answer.value ? '正确（√）' : '错误（×）';
+    if (q.type === 'ordering') {
+      return (q.answer.sequence || []).map(function (k, i) {
+        return (i + 1) + '. ' + k + ' ' + optionTextOf(q, k);
+      }).join(' → ');
+    }
+    if (q.type === 'matching') {
+      return (q.answer.pairs || []).map(function (p) {
+        return optionTextOf(q, p.left) + ' → ' + optionTextOf(q, p.right);
+      }).join('；');
+    }
     return q.answer.accept[0];
   }
 
   /* ---------------- 视图：P03 题卡 ---------------- */
   function sourceChip(q) {
     var label = SEED.SOURCE_TYPES[q.sourceType] || q.sourceType;
-    var page = q.sourcePage ? q.sourcePage : '页码待补';
+    var page = q.sourcePage ? q.sourcePage : '页码待核';
     return '<span class="chip chip-src" title="本题内容在书内的形态与位置">' +
       esc(label) + ' · ' + esc(page) + '</span>';
+  }
+  /* 核对状态角标：已核对 / AI 依书页生成·待抽检（页码缺失时提示待核） */
+  function reviewChip(q) {
+    var st = q.reviewStatus || q.reviewState;
+    if (st === 'book_checked') {
+      return '<span class="chip chip-review chip-review-ok" title="已对照纸质书核对">已核对</span>';
+    }
+    var txt = q.sourcePage
+      ? 'AI 依书页 ' + q.sourcePage + ' 生成 · 待抽检'
+      : 'AI 依书页生成 · 待抽检 · 页码待核';
+    return '<span class="chip chip-review chip-review-pending" title="' +
+      esc(q.pageNote || 'AI 依书页内容改写命题，尚未逐题人工抽检') + '">' + esc(txt) + '</span>';
   }
   function renderQuiz() {
     if (!S || !S.queue.length) { location.hash = '#/'; return; }
@@ -175,6 +268,7 @@
       '<span class="chip">' + esc(TYPE_NAMES[q.type]) + '</span>' +
       '<span class="chip">' + esc(DIFF_NAMES[q.difficulty]) + '</span>' +
       sourceChip(q) +
+      reviewChip(q) +
       '<span class="chip chip-origin-' + q.contentOrigin + '">' + esc(ORIGIN_NAMES[q.contentOrigin] || '') + '来源</span>';
 
     var bodyHtml = '';
@@ -187,6 +281,33 @@
       bodyHtml = '<div class="options tf-options">' +
         '<button class="option" data-key="true"><span class="opt-key">√</span><span class="opt-text">正确</span></button>' +
         '<button class="option" data-key="false"><span class="opt-key">×</span><span class="opt-text">错误</span></button></div>';
+    } else if (q.type === 'ordering') {
+      bodyHtml = '<p class="type-tip">按顺序依次点击下面的选项，排好后点「提交」；点已排好的项可撤回。</p>' +
+        '<div class="order-slots" id="orderSlots"><span class="order-ph">还没有排序</span></div>' +
+        '<div class="options order-options">' + q.options.map(function (o) {
+          return '<button class="option" data-okey="' + esc(o.key) + '">' +
+            '<span class="opt-key">' + esc(o.key) + '</span><span class="opt-text">' + esc(o.text) + '</span></button>';
+        }).join('') + '</div>' +
+        '<div class="fill-hint" id="orderHint"></div>' +
+        '<div class="order-actions">' +
+          '<button id="orderSubmit" class="btn btn-primary">提交</button>' +
+          '<button id="orderReset" class="btn btn-ghost btn-sm">重排</button></div>';
+    } else if (q.type === 'matching') {
+      var lefts = q.options.filter(function (o) { return o.side !== 'right'; });
+      var rights = q.options.filter(function (o) { return o.side === 'right'; });
+      bodyHtml = '<p class="type-tip">给左边每一项选一个对应的右边项，全部选好后提交。</p>' +
+        '<div class="match-list">' + lefts.map(function (l) {
+          return '<div class="match-row">' +
+            '<span class="match-left">' + esc(l.text) + '</span>' +
+            '<select class="match-select" data-left="' + esc(l.key) + '">' +
+              '<option value="">请选择</option>' +
+              rights.map(function (r) {
+                return '<option value="' + esc(r.key) + '">' + esc(r.text) + '</option>';
+              }).join('') +
+            '</select></div>';
+        }).join('') + '</div>' +
+        '<div class="fill-hint" id="matchHint"></div>' +
+        '<button id="matchSubmit" class="btn btn-primary">提交</button>';
     } else {
       bodyHtml = '<div class="fill-area">' +
         '<input id="fillInput" class="fill-input" type="text" placeholder="把答案写在这里" autocomplete="off" />' +
@@ -262,6 +383,86 @@
           afterJudge(correct, key);
         });
       });
+    } else if (q.type === 'ordering') {
+      var picked = [];
+      var optBtns = v.querySelectorAll('.order-options .option');
+      var slots = $('#orderSlots');
+      var paintSlots = function () {
+        if (!picked.length) {
+          slots.innerHTML = '<span class="order-ph">还没有排序</span>';
+          return;
+        }
+        slots.innerHTML = picked.map(function (k, i) {
+          var mark = judged ? ((q.answer.sequence[i] === k) ? ' ok' : ' bad') : '';
+          return '<button class="order-slot' + mark + '" data-i="' + i + '">' +
+            '<b>' + (i + 1) + '</b>' + esc(optionTextOf(q, k)) + '</button>';
+        }).join('');
+        slots.querySelectorAll('.order-slot').forEach(function (b) {
+          b.addEventListener('click', function () {
+            if (judged) return;
+            picked.splice(+b.getAttribute('data-i'), 1);
+            paintSlots(); paintOpts();
+          });
+        });
+      };
+      var paintOpts = function () {
+        optBtns.forEach(function (b) {
+          var k = b.getAttribute('data-okey');
+          b.classList.toggle('opt-picked', picked.indexOf(k) >= 0);
+          b.disabled = judged;
+        });
+      };
+      optBtns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (judged) return;
+          var k = btn.getAttribute('data-okey');
+          if (picked.indexOf(k) >= 0) return;
+          picked.push(k);
+          $('#orderHint').textContent = '';
+          paintSlots(); paintOpts();
+        });
+      });
+      $('#orderReset').addEventListener('click', function () {
+        if (judged) return;
+        picked = [];
+        paintSlots(); paintOpts();
+      });
+      $('#orderSubmit').addEventListener('click', function () {
+        if (judged) return;
+        if (picked.length < q.options.length) {
+          $('#orderHint').textContent = '还没排完，按顺序点完所有选项再提交';
+          return;
+        }
+        $('#orderHint').textContent = '';
+        judged = true;
+        var correctOrder = judge(q, picked.join(''));
+        paintSlots(); paintOpts();
+        $('#orderSubmit').disabled = true;
+        $('#orderReset').disabled = true;
+        afterJudge(correctOrder, picked.join(''));
+      });
+    } else if (q.type === 'matching') {
+      var sels = v.querySelectorAll('.match-select');
+      $('#matchSubmit').addEventListener('click', function () {
+        if (judged) return;
+        var pairs = [], missing = false;
+        sels.forEach(function (s) {
+          if (!s.value) missing = true;
+          pairs.push(s.getAttribute('data-left') + '-' + s.value);
+        });
+        if (missing) { $('#matchHint').textContent = '每一行都要选一个对应项'; return; }
+        $('#matchHint').textContent = '';
+        judged = true;
+        var givenPairs = pairs.join(',');
+        var correctMatch = judge(q, givenPairs);
+        sels.forEach(function (s) {
+          var exp = expectedRight(q, s.getAttribute('data-left'));
+          s.disabled = true;
+          s.classList.add(s.value === exp ? 'match-ok' : 'match-bad');
+        });
+        $('#matchSubmit').disabled = true;
+        afterJudge(correctMatch, givenPairs);
+      });
     } else {
       var input = $('#fillInput');
       var submit = function () {
@@ -335,13 +536,13 @@
             '<div class="subj-card-top"><span class="subj-name">' + esc(s.name) + '</span>' +
             (pool > 0
               ? '<span class="subj-pool">' + pool + ' 道可用题</span>'
-              : '<span class="subj-pool subj-pool-empty">题目核对中</span>') + '</div>' +
+              : '<span class="subj-pool subj-pool-empty">题库整理中</span>') + '</div>' +
             '<div class="subj-book">' + esc(s.bookTitle) + '</div>' +
             '<div class="subj-stats" id="stats-' + s.id + '"><span class="stat-dim">统计载入中…</span></div>' +
           '</button>';
         }).join('') +
       '</div>' +
-      '<p class="home-note">当前仅地理「第三章·世界的地形」有已核对题目；历史、生物与各章内容待拍摄录入，不会用未核对的题冒充。</p>';
+      '<p class="home-note">' + esc(homeNote()) + '</p>';
 
     v.querySelectorAll('.subj-card').forEach(function (c) {
       c.addEventListener('click', function () { location.hash = '#/c/' + c.getAttribute('data-subj'); });
@@ -375,8 +576,8 @@
     if (total === 0) {
       html += '<div class="empty">' +
         '<div class="empty-icon">◌</div>' +
-        '<p><b>' + esc(subj.name) + '</b>还没有可用题目。</p>' +
-        '<p class="empty-sub">内容待拍摄录入并按 SOP 核对后才会入池，不会用未核对题冒充。</p>' +
+        '<p><b>' + esc(subj.name) + '</b>的题库还在整理中。</p>' +
+        '<p class="empty-sub">这一科的题目尚未产出，暂不开放练习；不会用未核对的题或占位题冒充。</p>' +
         '<button class="btn btn-primary" id="emptyBack">先去练地理</button></div>';
     }
 
@@ -390,16 +591,20 @@
             '<span class="sec-page">' + esc(sec.page || '') + '</span>' +
             '<span class="sec-count">' + n + ' 题</span></button>';
         }
+        /* 0 题节灰显：书内已有题但全缺配图 → 缺配图；书内根本没有题 → 待录入 */
+        var raw = rawCount(subjId, ch.id, sec.id);
+        var offText = raw > 0 ? '缺配图 ' + raw + ' 道' : '待录入';
         return '<div class="sec-row sec-row-off" aria-disabled="true">' +
           '<span class="sec-title">' + esc(sec.title) + '</span>' +
           '<span class="sec-page">' + esc(sec.page || '') + '</span>' +
-          '<span class="sec-count sec-count-off">待拍摄录入</span></div>';
+          '<span class="sec-count sec-count-off">' + offText + '</span></div>';
       }).join('');
       return '<section class="ch-block">' +
         '<div class="ch-head">' +
-          '<div class="ch-title">' + esc(ch.title) +
+          '<div class="ch-title">' +
+            (ch.unit ? '<div class="ch-unit">' + esc(ch.unit) + '</div>' : '') +
+            esc(ch.title) +
             (ch.subtitle ? '<div class="ch-subtitle">' + esc(ch.subtitle) + '</div>' : '') +
-            (ch.unit ? '<div class="ch-subtitle">' + esc(ch.unit) + '</div>' : '') +
           '</div>' +
           '<button class="btn btn-outline ch-random" data-cid="' + ch.id + '"' + (chCount ? '' : ' disabled') + '>' +
             '整章随机' + (chCount ? '（' + chCount + '）' : '') + '</button>' +
@@ -521,8 +726,32 @@
     document.body.classList.remove('in-quiz');
     var v = $('#view');
     var st = DB.getSettings();
+    var sGeo = reviewStat('geo'), sHist = reviewStat('hist'), sBio = reviewStat('bio');
+    var sum = {
+      available: sGeo.available + sHist.available + sBio.available,
+      pending: sGeo.pending + sHist.pending + sBio.pending,
+      missingFigure: sGeo.missingFigure + sHist.missingFigure + sBio.missingFigure,
+      checked: sGeo.checked + sHist.checked + sBio.checked
+    };
+    var statRow = function (name, s) {
+      return '<tr><td>' + esc(name) + '</td><td><b>' + s.available + '</b></td><td>' + s.pending + '</td><td>' + s.missingFigure + '</td><td>' + s.checked + '</td></tr>';
+    };
+
     v.innerHTML =
       '<div class="page-top"><h2 class="page-title">设置</h2></div>' +
+
+      '<section class="set-card">' +
+        '<h3>题库统计</h3>' +
+        '<p class="set-desc">当前为「未抽检先用」模式：依书页生成的题直接可用，但会标注「AI 依书页 Pxx 生成 · 待抽检」；' +
+        '缺配图的题暂不进练习池。</p>' +
+        '<table class="store-table stat-table">' +
+          '<tr><th>科目</th><th>可用</th><th>待抽检</th><th>缺配图</th><th>已核对</th></tr>' +
+          statRow('地理', sGeo) + statRow('历史', sHist) + statRow('生物', sBio) +
+          '<tr class="stat-sum"><td>合计</td><td><b>' + sum.available + '</b></td><td>' + sum.pending + '</td><td>' + sum.missingFigure + '</td><td>' + sum.checked + '</td></tr>' +
+        '</table>' +
+        '<p class="set-desc set-desc-s">「可用」= 会进入随机抽题池的题；「缺配图」= book_transcribed 但 needsFigure=true，' +
+        '补齐配图前不出现；历史 12 道 inferred 题（pending_book_check）已在生成题库时排除。</p>' +
+      '</section>' +
 
       '<section class="set-card">' +
         '<h3>数据备份</h3>' +
@@ -557,12 +786,15 @@
 
       '<section class="set-card">' +
         '<h3>内容来源与核对状态</h3>' +
-        '<p class="set-desc">题目出自《初中学霸创新题》书内「划重点 / 表格 / 思维导图 / 考点要点」，仅家庭自用。' +
-        '每张题卡标注<b>来源类型 + 书内页码</b>；只有对照书本核对过的题（book_checked）才会出现。</p>' +
+        '<p class="set-desc">题目出自《初中学霸创新题》书内「划重点 / 表格 / 思维导图 / 图表 / 考点要点」，仅家庭自用。' +
+        '每张题卡标注<b>来源类型 + 书内页码 + 核对状态</b>：已对照纸质书核对的显示「已核对」，' +
+        'AI 依书页生成、尚未人工抽检的显示「AI 依书页 Pxx 生成 · 待抽检」，页码缺失的显示「页码待核」。</p>' +
         '<table class="store-table">' +
-          '<tr><td>书内题（已核对）</td><td class="ok-text">' + poolCount() + ' 道 · 地理第三章第二节（书 P18–19 / 课本 P46–47）</td></tr>' +
-          '<tr><td>网络考点要点（待核对）</td><td>' + SEED.QUESTIONS.filter(function (q) { return q.contentOrigin === 'web'; }).length + ' 道 · 不出现在练习中</td></tr>' +
-          '<tr><td>其余章节</td><td>待拍摄录入（见 README 拍摄清单）</td></tr>' +
+          '<tr><td>书内题（可用）</td><td class="ok-text">' + sum.available + ' 道 · 会进入练习池</td></tr>' +
+          '<tr><td>其中待抽检</td><td>' + sum.pending + ' 道 · 依书页生成，尚未人工抽检</td></tr>' +
+          '<tr><td>其中已核对</td><td>' + sum.checked + ' 道 · 地理第三章第二节（书 P18–19）</td></tr>' +
+          '<tr><td>缺配图暂不可用</td><td>' + sum.missingFigure + ' 道 · 补齐配图后放开</td></tr>' +
+          '<tr><td>网络考点要点</td><td>' + SEED.QUESTIONS.filter(function (q) { return q.contentOrigin === 'web'; }).length + ' 道 · 不出现在练习中</td></tr>' +
         '</table>' +
         '<p class="set-desc">错题规则：答错自动进本科错题本；重做连对 ' + st.masterStreak + ' 次标「已掌握」并从待重做隐藏（不删除）。</p>' +
       '</section>';

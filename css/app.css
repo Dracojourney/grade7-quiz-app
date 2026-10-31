@@ -365,6 +365,63 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 .export-text { width: 100%; min-height: 160px; margin-top: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; border: 1px solid rgba(255, 255, 255, .8); border-radius: 12px; padding: 10px; background: rgba(255, 255, 255, .75); color: var(--ink); }
 #exportBox .btn { margin-top: 8px; }
 
+/* ---------------- 核对状态与题型提示（2026-10-31 未抽检先用） ---------------- */
+.chip-review { font-weight: 700; }
+.chip-review-ok { background: rgba(16, 185, 129, .16); border-color: rgba(14, 159, 110, .45); color: var(--ok-deep); }
+.chip-review-pending { background: rgba(251, 191, 36, .2); border-color: rgba(180, 83, 9, .4); color: #9a5a08; }
+.type-tip { padding: 0 20px 12px; font-size: 14.5px; color: var(--ink2); line-height: 1.7; }
+
+/* 排序题：已排槽位 + 可点选项 */
+.order-slots {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 0 20px 12px; padding: 12px; min-height: 60px;
+  background: rgba(255, 255, 255, .45); border: 1.5px dashed rgba(124, 134, 165, .5); border-radius: var(--radius-s);
+}
+.order-ph { font-size: 14px; color: var(--ink3); }
+.order-slot {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px;
+  font-family: inherit; font-size: 15.5px; font-weight: 600; color: var(--ink);
+  background: rgba(255, 255, 255, .8); border: 1.5px solid rgba(255, 255, 255, .9); border-radius: 14px;
+  cursor: pointer; text-align: left;
+}
+.order-slot b {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 12.5px; color: #fff;
+  background: var(--grad-acc);
+}
+.order-slot.ok { background: var(--ok-bg); border-color: #34d399; }
+.order-slot.ok b { background: var(--grad-ok); }
+.order-slot.bad { background: var(--bad-bg); border-color: #fb7185; }
+.order-slot.bad b { background: var(--grad-bad); }
+.order-options { padding-top: 0; }
+.option.opt-picked { opacity: .45; border-style: dashed; background: rgba(255, 255, 255, .4); }
+.order-actions { display: flex; gap: 10px; padding: 0 20px 18px; }
+
+/* 匹配题：左项 + 右侧下拉 */
+.match-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 20px 8px; }
+.match-row { display: flex; align-items: center; gap: 10px; }
+.match-left { flex: 0 0 38%; font-size: 15.5px; font-weight: 600; line-height: 1.5; }
+.match-select {
+  flex: 1; min-height: 46px; padding: 8px 10px; font-family: inherit; font-size: 15px; color: var(--ink);
+  background: rgba(255, 255, 255, .75); border: 1.5px solid rgba(255, 255, 255, .9); border-radius: 12px;
+}
+.match-select.match-ok { border-color: #34d399; background: var(--ok-bg); }
+.match-select.match-bad { border-color: #fb7185; background: var(--bad-bg); }
+
+/* ---------------- 设置页题库统计 ---------------- */
+.ch-unit { font-size: 12px; font-weight: 600; letter-spacing: .08em; color: var(--ink3); margin-bottom: 2px; }
+.stat-table { margin-bottom: 8px; }
+.stat-table th {
+  font-size: 12.5px; font-weight: 700; color: var(--ink3); text-align: right;
+  padding: 6px 6px 8px; border-bottom: 1.5px solid rgba(120, 130, 170, .35);
+}
+.stat-table th:first-child { text-align: left; }
+.stat-table td { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat-table td:first-child, .stat-table th:first-child { width: 26%; }
+.stat-table td b { font-size: 16px; }
+.stat-sum td { border-top: 1.5px solid rgba(120, 130, 170, .35); font-weight: 700; }
+.set-desc-s { font-size: 13px; color: var(--ink3); margin-bottom: 0; }
+
 /* ---------------- 降级：backdrop-filter 不可用时用近实色卡片，保证可读性 ---------------- */
 @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
   .subj-card, .ch-block, .qcard, .summary-card, .wrong-item, .set-card,

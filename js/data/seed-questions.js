@@ -1,28 +1,27 @@
 /* ============================================================================
- * seed-questions.js —— 题库与书目录树（内嵌数据，双击 index.html 即可用）
+ * seed-questions.js —— 题库核心（科目表 / 来源类型 / 历史目录树 / 已核对样板题）
  *
  * 为什么用 JS 挂 window 而不是 fetch JSON：
  *   file:// 协议下浏览器会拦截 fetch 读本地文件，故题库内嵌为 window.XBJ_SEED。
  *
- * 入池红线（docs/04 + 2026-10-31 产品定义）：
- *   1. 只有 reviewStatus/reviewState === 'book_checked' 的题进入练习池；
- *      pending_book_check 的题随数据加载但【绝不出给学生】。
- *   2. contentOrigin = 'book'（书内来源：划重点/表格等，有真实内页照片依据）
- *      与 'web'（网络来源，sourceType=keypoint）在数据与界面上严格区分；
- *      练习池默认只用 book_checked 的书内题。
- *   3. 不得把网络通用知识伪装成“书里第 X 页的划重点”。
+ * 加载顺序（index.html）：本文件 → seed-geo.js → seed-bio.js → seed-hist.js → storage.js → app.js
+ *   seed-geo.js / seed-bio.js / seed-hist.js 由 tools/build-seed.js 从 data/extracted/ 生成，
+ *   负责向 window.XBJ_SEED 追加本科章树与题目，不要手改生成物。
  *
- * 以后加题的路径约定（与 data/ 目录保持一致）：
- *   草稿仍放 data/drafts/<subj>_<章>_<节>.draft.json（JSON，供 SOP 核对）；
- *   核对通过后按章追加到本文件 QUESTIONS 数组（或新增 js/data/seed-<章>.js），
- *   每章一个数据块，加章不改代码。
+ * 入池规则（2026-10-31 用户授权变更，详见 js/app.js getPool 注释）：
+ *   1. 接受 reviewStatus = book_checked（已核对）与 book_transcribed（AI 依书页生成、待抽检）。
+ *   2. needsFigure = true（缺配图）、example = true、pending_book_check 一律不进池。
+ *   3. contentOrigin = 'book' 的书内题；web 来源（keypoint）随数据加载但绝不出给学生。
+ *   4. getPool() 是唯一入池入口，任何界面都不得绕过。
  * ==========================================================================*/
 window.XBJ_SEED = {
   meta: {
-    bundleVersion: '1.1.0',
+    bundleVersion: '1.2.0',
     schemaVersion: '1.1',
     generatedAt: '2026-10-31T00:00:00+08:00',
-    note: '书目录（学霸笔记）为导航主键；教材章节降为映射字段。可用题=book_checked 的书内题。'
+    poolMode: 'transcribed_allowed',
+    note: '书目录（学霸笔记）为导航主键；教材章节降为映射字段。' +
+      '2026-10-31 起入池开放到 book_transcribed（未抽检先用），needsFigure 仍排除。'
   },
 
   SUBJECTS: [
@@ -32,87 +31,13 @@ window.XBJ_SEED = {
   ],
 
   /* 书目录树（学霸笔记内页目录，2026-10-30 照片转录，docs/01 第三节）。
-   * page = 该节在书内的起始页码（书内页码，非教材页码）。 */
+   * page = 该节在书内的起始页码（书内页码，非教材页码）。
+   * 三科章树均由 seed-<科目>.js 从 data/extracted/ 生成并覆盖
+   * （2026-10-31 历史题库产出后，本文件不再保留手写章树）。 */
   TREES: {
-    geo: [
-      { id: 'GEO-C01', title: '第一章 让我们走进地理', mindmapPage: 'P1', sections: [
-        { id: 'GEO-C01-S01', title: '我们身边的地理', page: 'P2' },
-        { id: 'GEO-C01-S02', title: '我们怎样学地理', page: 'P3' } ] },
-      { id: 'GEO-C02', title: '第二章 认识地球', mindmapPage: 'P6', sections: [
-        { id: 'GEO-C02-S01', title: '地球与地球仪', page: 'P7' },
-        { id: 'GEO-C02-S02', title: '地球的运动', page: 'P12' } ] },
-      { id: 'GEO-C03', title: '第三章 地球的面貌', mindmapPage: 'P14', sections: [
-        { id: 'GEO-C03-S01', title: '世界的海陆分布', page: 'P15' },
-        { id: 'GEO-C03-S02', title: '世界的地形', page: 'P18' },
-        { id: 'GEO-C03-S03', title: '海陆变迁', page: 'P22' } ] },
-      { id: 'GEO-C04', title: '第四章 世界的居民与文化', mindmapPage: 'P25', sections: [
-        { id: 'GEO-C04-S01', title: '世界的人口', page: 'P26' },
-        { id: 'GEO-C04-S02', title: '世界的聚落', page: 'P30' },
-        { id: 'GEO-C04-S03', title: '丰富多彩的世界文化', page: 'P32' } ] },
-      { id: 'GEO-C05', title: '第五章 世界的气候', mindmapPage: 'P34', sections: [
-        { id: 'GEO-C05-S01', title: '天气与天气预报', page: 'P35' },
-        { id: 'GEO-C05-S02', title: '气温和降水', page: 'P37' },
-        { id: 'GEO-C05-S03', title: '影响气候的因素', page: 'P42' },
-        { id: 'GEO-C05-S04', title: '世界主要气候类型', page: 'P46' } ] },
-      { id: 'GEO-C06', title: '第六章 世界的发展差异', mindmapPage: null, sections: [
-        { id: 'GEO-C06-S01', title: '发展中国家与发达国家', page: 'P51' },
-        { id: 'GEO-C06-S02', title: '国际合作', page: 'P54' } ] }
-    ],
-    hist: [
-      { id: 'HIST-U01', title: '第一单元 史前时期', subtitle: '原始社会与中华文明的起源', mindmapPage: 'P1', sections: [
-        { id: 'HIST-U01-L01', title: '第1课 远古时期的人类活动', page: 'P2' },
-        { id: 'HIST-U01-L02', title: '第2课 原始农业与史前社会', page: 'P3' },
-        { id: 'HIST-U01-L03', title: '第3课 中华文明的起源', page: 'P4' } ] },
-      { id: 'HIST-U02', title: '第二单元 夏商周时期', subtitle: '奴隶制王朝的更替和向封建社会的过渡', mindmapPage: 'P5', sections: [
-        { id: 'HIST-U02-L04', title: '第4课 夏商西周王朝的更替', page: 'P6' },
-        { id: 'HIST-U02-L05', title: '第5课 动荡变化中的春秋时期', page: 'P8' },
-        { id: 'HIST-U02-L06', title: '第6课 战国时期的社会变革', page: 'P9' },
-        { id: 'HIST-U02-L07', title: '第7课 百家争鸣', page: 'P11' },
-        { id: 'HIST-U02-L08', title: '第8课 夏商周时期的科技与文化', page: 'P13' } ] },
-      { id: 'HIST-U03', title: '第三单元 秦汉时期', subtitle: '统一多民族封建国家的建立和巩固', mindmapPage: 'P14', sections: [
-        { id: 'HIST-U03-L09', title: '第9课 秦统一中国', page: 'P15' },
-        { id: 'HIST-U03-L10', title: '第10课 秦末农民大起义', page: 'P17' },
-        { id: 'HIST-U03-L11', title: '第11课 西汉建立和“文景之治”', page: 'P18' },
-        { id: 'HIST-U03-L12', title: '第12课 大一统王朝的巩固', page: 'P19' },
-        { id: 'HIST-U03-L13', title: '第13课 东汉的兴衰', page: 'P21' },
-        { id: 'HIST-U03-L14', title: '第14课 丝绸之路的开通与经营西域', page: 'P22' },
-        { id: 'HIST-U03-L15', title: '第15课 秦汉时期的科技与文化', page: 'P24' } ] },
-      { id: 'HIST-U04', title: '第四单元 三国两晋南北朝时期', subtitle: '政权分立与民族交融', mindmapPage: 'P26', sections: [
-        { id: 'HIST-U04-L16', title: '第16课 三国鼎立', page: 'P27' },
-        { id: 'HIST-U04-L17', title: '第17课 西晋的短暂统一和北方各族的内迁', page: 'P28' },
-        { id: 'HIST-U04-L18', title: '第18课 东晋南朝政治和江南地区开发', page: 'P29' },
-        { id: 'HIST-U04-L19', title: '第19课 北朝政治和北方民族大交融', page: 'P30' },
-        { id: 'HIST-U04-L20', title: '第20课 三国两晋南北朝时期的科技与文化', page: 'P32' } ] }
-    ],
-    bio: [
-      { id: 'BIO-U1-C01', title: '第一章 认识生物', unit: '第一单元 生物和细胞', sections: [
-        { id: 'BIO-U1-C01-S01', title: '观察周边环境中的生物', page: 'P2' },
-        { id: 'BIO-U1-C01-S02', title: '生物的特征', page: 'P3' } ] },
-      { id: 'BIO-U1-C02', title: '第二章 认识细胞', unit: '第一单元 生物和细胞', sections: [
-        { id: 'BIO-U1-C02-S01', title: '学习使用显微镜', page: 'P6' },
-        { id: 'BIO-U1-C02-S02', title: '植物细胞', page: 'P9' },
-        { id: 'BIO-U1-C02-S03', title: '动物细胞', page: 'P11' },
-        { id: 'BIO-U1-C02-S04', title: '细胞的生活', page: 'P14' } ] },
-      { id: 'BIO-U1-C03', title: '第三章 从细胞到生物体', unit: '第一单元 生物和细胞', sections: [
-        { id: 'BIO-U1-C03-S01', title: '细胞通过分裂产生新细胞', page: 'P16' },
-        { id: 'BIO-U1-C03-S02', title: '动物体的结构层次', page: 'P18' },
-        { id: 'BIO-U1-C03-S03', title: '植物体的结构层次', page: 'P20' },
-        { id: 'BIO-U1-C03-S04', title: '单细胞生物', page: 'P22' } ] },
-      { id: 'BIO-U2-C01', title: '第一章 藻类与植物的类群', unit: '第二单元 多种多样的生物', sections: [
-        { id: 'BIO-U2-C01-S01', title: '藻类、苔藓植物和蕨类植物', page: 'P26' },
-        { id: 'BIO-U2-C01-S02', title: '种子植物', page: 'P29' } ] },
-      { id: 'BIO-U2-C02', title: '第二章 动物的类群', unit: '第二单元 多种多样的生物', sections: [
-        { id: 'BIO-U2-C02-S01', title: '无脊椎动物', page: 'P32' },
-        { id: 'BIO-U2-C02-S02', title: '脊椎动物', page: 'P36' } ] },
-      { id: 'BIO-U2-C03', title: '第三章 微生物', unit: '第二单元 多种多样的生物', sections: [
-        { id: 'BIO-U2-C03-S01', title: '微生物的分布', page: 'P46' },
-        { id: 'BIO-U2-C03-S02', title: '细菌', page: 'P49' },
-        { id: 'BIO-U2-C03-S03', title: '真菌', page: 'P52' },
-        { id: 'BIO-U2-C03-S04', title: '病毒', page: 'P55' } ] },
-      { id: 'BIO-U2-C04', title: '第四章 生物分类的方法', unit: '第二单元 多种多样的生物', sections: [
-        { id: 'BIO-U2-C04-S01', title: '尝试对生物进行分类', page: 'P57' },
-        { id: 'BIO-U2-C04-S02', title: '从种到界', page: 'P60' } ] }
-    ]
+    geo: [],
+    hist: [],
+    bio: []
   },
 
   /* 来源类型（书内内容形态，docs/04 3.1a） */
@@ -120,9 +45,11 @@ window.XBJ_SEED = {
     highlight: '划重点', table: '表格', mindmap: '思维导图', keypoint: '考点要点', figure: '图表判读'
   },
 
-  /* 10 道样板题（地理·书第三章·世界的地形）。
+  /* 已核对样板题（地理·书第三章·世界的地形）。
    * book_checked 5 道（书内来源，页码已按 2026-10-30 照片回填）；
-   * pending_book_check 5 道（web 来源，keypoint，不出给学生）。 */
+   * pending_book_check 5 道（web 来源，keypoint，不出给学生）。
+   * 地理其余章节、生物全科、历史全科由 seed-geo.js / seed-bio.js / seed-hist.js
+   * 追加（book_transcribed）；历史 12 道 inferred 题（pending_book_check）已排除。 */
   QUESTIONS: [
     {
       id: 'GEO-C03-S02-K03-Q01', subject: 'geo',

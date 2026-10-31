@@ -11,8 +11,8 @@
   <!--
     小四门刷题（单用户·孩子本人）
     - 纯前端零依赖：双击本文件即可使用（file://），不发任何网络请求。
-    - 题库内嵌于 js/data/seed-questions.js（window.XBJ_SEED），
-      只有 reviewStatus/reviewState === 'book_checked' 的题会进入练习池（见 js/app.js getPool）。
+    - 题库内嵌于 js/data/seed-questions.js + seed-geo.js / seed-bio.js / seed-hist.js（window.XBJ_SEED）；
+      入池 = reviewStatus ∈ {book_checked, book_transcribed} 且非 needsFigure（见 js/app.js getPool）。
     - 用户数据：错题本/设置 → localStorage（xbj.v1.*，按科隔离）；
       作答流水/练习汇总 → IndexedDB（库 xbj-v1）。见 js/storage.js 顶部注释。
     - 内容仅家庭自用，不对外分发。
@@ -31,8 +31,11 @@
 
   <div id="toast" role="status"></div>
 
-  <!-- 顺序加载：数据 → 存储 → 应用（普通 script，file:// 下不可用 ES module） -->
+  <!-- 顺序加载：核心数据 → 分科题库（生成物）→ 存储 → 应用（普通 script，file:// 下不可用 ES module） -->
   <script src="js/data/seed-questions.js"></script>
+  <script src="js/data/seed-geo.js"></script>
+  <script src="js/data/seed-bio.js"></script>
+  <script src="js/data/seed-hist.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/app.js"></script>
 </body>
