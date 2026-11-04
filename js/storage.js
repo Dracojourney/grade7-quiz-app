@@ -6,6 +6,8 @@
  *   xbj.v1.wrongBook.geo     地理错题本（数组，按科隔离）
  *   xbj.v1.wrongBook.hist    历史错题本
  *   xbj.v1.wrongBook.bio     生物错题本
+ *   xbj.v1.quizRounds        随机批次进度（按 科目|章|节 作用域隔离，刷新可续做）
+ *   xbj.v1.activeQuiz        当前答题会话指针（刷新 #/quiz 时恢复）
  *
  * IndexedDB（异步、可累积）：
  *   库 xbj-v1
@@ -115,7 +117,9 @@
   window.XBJStorage = {
     KEYS: {
       settings: LS_PREFIX + 'settings',
-      wrongBook: function (subj) { return LS_PREFIX + 'wrongBook.' + subj; }
+      wrongBook: function (subj) { return LS_PREFIX + 'wrongBook.' + subj; },
+      quizRounds: LS_PREFIX + 'quizRounds',
+      activeQuiz: LS_PREFIX + 'activeQuiz'
     },
 
     /* 设置 */
@@ -135,6 +139,23 @@
       return Array.isArray(list) ? list : [];
     },
     saveWrongBook: function (subj, list) { return lsSet(this.KEYS.wrongBook(subj), list); },
+
+    /* 随机批次进度（对象：scope 键 → 批次状态；按科/章/节隔离） */
+    getQuizRounds: function () {
+      var m = lsGet(this.KEYS.quizRounds, {});
+      return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {};
+    },
+    saveQuizRounds: function (m) { return lsSet(this.KEYS.quizRounds, m); },
+
+    /* 当前答题会话指针（仅记录从哪进入；题库进度仍在 quizRounds） */
+    getActiveQuiz: function () {
+      var a = lsGet(this.KEYS.activeQuiz, null);
+      return (a && typeof a === 'object') ? a : null;
+    },
+    saveActiveQuiz: function (a) { return lsSet(this.KEYS.activeQuiz, a); },
+    clearActiveQuiz: function () {
+      try { localStorage.removeItem(this.KEYS.activeQuiz); } catch (e) {}
+    },
 
     /* 答错：写入/更新本科错题本（练习与重做都会调用） */
     markWrong: function (q) {
@@ -210,6 +231,7 @@
             hist: self.getWrongBook('hist'),
             bio: self.getWrongBook('bio')
           },
+          quizRounds: self.getQuizRounds(),
           attempts: rs[0],
           sessions: rs[1]
         };
@@ -223,6 +245,8 @@
         try { localStorage.removeItem(self.KEYS.wrongBook(s)); } catch (e) {}
       });
       try { localStorage.removeItem(this.KEYS.settings); } catch (e) {}
+      try { localStorage.removeItem(this.KEYS.quizRounds); } catch (e) {}
+      try { localStorage.removeItem(this.KEYS.activeQuiz); } catch (e) {}
       return Promise.all([idbClear('attempts'), idbClear('sessions')]).catch(function (e) {
         console.warn('[storage] IndexedDB 清空失败', e);
       });

@@ -72,8 +72,15 @@
     return POOL_STATUSES.indexOf(st) >= 0;
   }
   function getPool(subj) {
+    /* 按 id 去重：题库增量生成时出现过重复 id（手写样板题与生成物撞 id），
+     * 若不去重，同一轮会因 id 相同而「撞题」，且 questionById 只能取到第一条。
+     * 去重保留先出现的一条（手写已核对版本优先）。 */
+    var seen = {};
     return SEED.QUESTIONS.filter(function (q) {
-      return isPoolable(q) && (subj ? q.subject === subj : true);
+      if (!isPoolable(q) || (subj && q.subject !== subj)) return false;
+      if (seen[q.id]) return false;
+      seen[q.id] = true;
+      return true;
     });
   }
   function poolCount(subj, chapterId, sectionId) {
@@ -132,42 +139,218 @@
     t._tm = setTimeout(function () { t.classList.remove('show'); }, 2200);
   }
 
-  /* ---------------- 答题会话状态 ---------------- */
-  var S = null; /* {sessionId, subj, chapterId, sectionId, origin, queue, idx, correct, wrong, judged, startedAt, qStartAt} */
+  /* ---------------- 答题会话状态 ----------------
+   * 练习（practice）按「批次」出题：
+   *   - 进入某个 科目/章/节 时，把该范围内的全量可用题打乱成一个批次（round）；
+   *   - 同批次内按打乱后的顺序逐题出现，绝不重复；
+   *   - 当前题、已出现题、剩余题、批次号与答对/答错数都持久化到
+   *     localStorage（xbj.v1.quizRounds，按作用域隔离），刷新或再次进入可续做；
+   *   - 「换一道」只替换当前题，从本批剩余题里随机抽；本批用完自动开新批；
+   *   - 「换一批」立即结束当前批次，重新打乱全量题，并停留在答题页。
+   * 错题重做（redo）仍是单题会话，不参与批次。
+   * S: {sessionId, subj, chapterId, sectionId, origin, currentId, total, seen,
+   *     remaining, correct, wrong, judged, completed, startedAt, qStartAt, roundState}
+   * ------------------------------------------------------------ */
+  var S = null;
 
-  function newSession(subj, chapterId, sectionId, origin, queue) {
+  function nowISO() { return new Date().toISOString(); }
+  function scopeKey(subj, chapterId, sectionId) {
+    return subj + '|' + (chapterId || '*') + '|' + (sectionId || '*');
+  }
+  function roundIds(subj, chapterId, sectionId) {
+    return getPool(subj).filter(function (q) {
+      if (chapterId && q.bookChapterId !== chapterId) return false;
+      if (sectionId && q.bookSectionId !== sectionId) return false;
+      return true;
+    }).map(function (q) { return q.id; });
+  }
+  function getSavedRound(subj, chapterId, sectionId) {
+    var all = DB.getQuizRounds();
+    var st = all[scopeKey(subj, chapterId, sectionId)];
+    return (st && typeof st === 'object') ? st : null;
+  }
+  function saveRound(st) {
+    st.updatedAt = nowISO();
+    var all = DB.getQuizRounds();
+    all[st.scope] = st;
+    DB.saveQuizRounds(all);
+  }
+  /* 校验存档：题库增删后仍可续做；已失效 id 剔除，新题补进本批剩余 */
+  function normalizeRound(st, ids, subj, chapterId, sectionId) {
+    if (!st) return null;
+    var scope = scopeKey(subj, chapterId, sectionId);
+    if (st.scope !== scope) return null;
+    var idSet = {};
+    ids.forEach(function (id) { idSet[id] = true; });
+    var seen = [], seenSet = {}, remaining = [], remSet = {};
+    (st.seen || []).forEach(function (id) {
+      if (idSet[id] && !seenSet[id]) { seenSet[id] = true; seen.push(id); }
+    });
+    (st.remaining || []).forEach(function (id) {
+      if (idSet[id] && !seenSet[id] && !remSet[id]) { remSet[id] = true; remaining.push(id); }
+    });
+    var current = idSet[st.current] ? st.current : null;
+    if (!current) current = remaining.shift() || null;
+    if (current && !seenSet[current]) { seenSet[current] = true; seen.push(current); }
+    if (!current) return null;
+    var fresh = ids.filter(function (id) { return !seenSet[id] && !remSet[id]; });
+    remaining = remaining.concat(shuffle(fresh));
+    return {
+      scope: scope, subj: subj, chapterId: chapterId, sectionId: sectionId,
+      round: typeof st.round === 'number' && st.round > 0 ? st.round : 1,
+      current: current, seen: seen, remaining: remaining, total: ids.length,
+      correct: Math.max(0, st.correct || 0), wrong: Math.max(0, st.wrong || 0),
+      answeredCurrent: st.answeredCurrent === true,
+      completed: st.completed === true,
+      updatedAt: st.updatedAt || nowISO()
+    };
+  }
+  function createRound(subj, chapterId, sectionId, ids, prev, keepStats) {
+    var order = shuffle(ids);
+    return {
+      scope: scopeKey(subj, chapterId, sectionId),
+      subj: subj, chapterId: chapterId, sectionId: sectionId,
+      round: (prev && typeof prev.round === 'number' ? prev.round : 0) + 1,
+      current: order[0], seen: [order[0]], remaining: order.slice(1), total: order.length,
+      correct: (keepStats && prev ? (prev.correct || 0) : 0),
+      wrong: (keepStats && prev ? (prev.wrong || 0) : 0),
+      answeredCurrent: false, completed: false, updatedAt: nowISO()
+    };
+  }
+  /* 断点续做：上一题已判定但还没点「下一题」时，续做直接进入下一题，避免重复计分 */
+  function prepareRound(st) {
+    if (!st.answeredCurrent) return st;
+    st.answeredCurrent = false;
+    if (st.remaining.length) {
+      st.current = st.remaining.shift();
+      if (st.seen.indexOf(st.current) < 0) st.seen.push(st.current);
+      st.completed = false;
+    } else {
+      st.completed = true;
+    }
+    saveRound(st);
+    return st;
+  }
+  function syncSessionFromRound(st) {
+    S.currentId = st.current;
+    S.total = st.total;
+    S.seen = st.seen;
+    S.remaining = st.remaining;
+    S.correct = st.correct;
+    S.wrong = st.wrong;
+    S.completed = st.completed === true;
+    S.roundState = st;
+    S.judged = false;
+    S.qStartAt = Date.now();
+  }
+  function openPracticeSession(st) {
     S = {
       sessionId: 'S' + Date.now().toString(36) + Math.floor(Math.random() * 1000),
-      subj: subj, chapterId: chapterId, sectionId: sectionId, origin: origin,
-      queue: queue, idx: 0, correct: 0, wrong: 0, judged: false,
-      startedAt: new Date().toISOString(), qStartAt: Date.now()
+      subj: st.subj, chapterId: st.chapterId, sectionId: st.sectionId, origin: 'practice',
+      currentId: st.current, total: st.total, seen: st.seen, remaining: st.remaining,
+      correct: st.correct, wrong: st.wrong, judged: false, completed: st.completed === true,
+      startedAt: nowISO(), qStartAt: Date.now(), roundState: st
     };
     DB.putSession({
-      sessionId: S.sessionId, subject: subj, chapterId: chapterId, sectionId: sectionId,
-      origin: origin, total: queue.length, correct: 0, startedAt: S.startedAt, endedAt: null
+      sessionId: S.sessionId, subject: S.subj, chapterId: S.chapterId, sectionId: S.sectionId,
+      origin: 'practice', total: S.total, correct: S.correct, startedAt: S.startedAt, endedAt: null
+    });
+    DB.saveActiveQuiz({
+      origin: 'practice', subj: S.subj, chapterId: S.chapterId, sectionId: S.sectionId
     });
   }
   function endSession() {
     if (!S) return;
     DB.putSession({
       sessionId: S.sessionId, subject: S.subj, chapterId: S.chapterId, sectionId: S.sectionId,
-      origin: S.origin, total: S.queue.length, correct: S.correct, startedAt: S.startedAt,
-      endedAt: new Date().toISOString()
+      origin: S.origin, total: S.total, correct: S.correct, startedAt: S.startedAt,
+      endedAt: nowISO()
     });
   }
   function startPractice(subj, chapterId, sectionId) {
-    var pool = getPool(subj).filter(function (q) {
-      if (chapterId && q.bookChapterId !== chapterId) return false;
-      if (sectionId && q.bookSectionId !== sectionId) return false;
-      return true;
-    });
-    if (!pool.length) { toast('这一章还没有可用题目'); return; }
-    newSession(subj, chapterId, sectionId, 'practice', shuffle(pool.map(function (q) { return q.id; })));
-    location.hash = '#/quiz';
+    var ids = roundIds(subj, chapterId, sectionId);
+    if (!ids.length) { toast('这一章还没有可用题目'); return; }
+    var saved = getSavedRound(subj, chapterId, sectionId);
+    var st = (saved && !saved.completed)
+      ? normalizeRound(saved, ids, subj, chapterId, sectionId)
+      : null;
+    if (!st) st = createRound(subj, chapterId, sectionId, ids, saved, false);
+    prepareRound(st);
+    saveRound(st);
+    openPracticeSession(st);
+    if (location.hash === '#/quiz') renderQuiz();
+    else location.hash = '#/quiz';
   }
   function startRedo(subj, questionId) {
-    newSession(subj, null, null, 'redo', [questionId]);
+    var q = questionById(questionId);
+    if (!q) { toast('这道题的数据缺失，暂时不能重做'); return; }
+    S = {
+      sessionId: 'S' + Date.now().toString(36) + Math.floor(Math.random() * 1000),
+      subj: subj, chapterId: null, sectionId: null, origin: 'redo',
+      currentId: questionId, total: 1, seen: [questionId], remaining: [],
+      correct: 0, wrong: 0, judged: false, completed: false,
+      startedAt: nowISO(), qStartAt: Date.now(), roundState: null
+    };
+    DB.putSession({
+      sessionId: S.sessionId, subject: subj, chapterId: null, sectionId: null,
+      origin: 'redo', total: 1, correct: 0, startedAt: S.startedAt, endedAt: null
+    });
+    DB.saveActiveQuiz({ origin: 'redo', subj: subj, questionId: questionId });
     location.hash = '#/quiz';
+  }
+  /* 刷新/直接打开 #/quiz 时，按活跃会话指针恢复；恢复不了就回首页 */
+  function restoreActiveQuiz() {
+    var a = DB.getActiveQuiz();
+    if (!a) return false;
+    if (a.origin === 'redo') {
+      var q = questionById(a.questionId);
+      if (!q) return false;
+      startRedo(a.subj, a.questionId);
+      return true;
+    }
+    var ids = roundIds(a.subj, a.chapterId, a.sectionId);
+    if (!ids.length) return false;
+    var saved = getSavedRound(a.subj, a.chapterId, a.sectionId);
+    if (!saved) return false;
+    var st = normalizeRound(saved, ids, a.subj, a.chapterId, a.sectionId);
+    if (!st) return false;
+    prepareRound(st);
+    saveRound(st);
+    openPracticeSession(st);
+    return true;
+  }
+  /* 换一道：只替换当前题；本批剩余为空则自动开新批 */
+  function swapOne() {
+    if (!S || S.origin !== 'practice' || !S.roundState) return;
+    var st = S.roundState;
+    if (st.remaining.length) {
+      var i = Math.floor(Math.random() * st.remaining.length);
+      st.current = st.remaining.splice(i, 1)[0];
+      if (st.seen.indexOf(st.current) < 0) st.seen.push(st.current);
+      st.answeredCurrent = false;
+      saveRound(st);
+      syncSessionFromRound(st);
+      renderQuiz();
+      toast('已换一道');
+      return;
+    }
+    var ids = roundIds(S.subj, S.chapterId, S.sectionId);
+    var fresh = createRound(S.subj, S.chapterId, S.sectionId, ids, st, false);
+    saveRound(fresh);
+    syncSessionFromRound(fresh);
+    renderQuiz();
+    toast('本批题目已用完，已自动开始新一批');
+  }
+  /* 换一批：立即结束当前批次，重新打乱全量题，停留在答题页继续做 */
+  function swapBatch() {
+    if (!S || S.origin !== 'practice' || !S.roundState) return;
+    var ids = roundIds(S.subj, S.chapterId, S.sectionId);
+    if (!ids.length) return;
+    var fresh = createRound(S.subj, S.chapterId, S.sectionId, ids, S.roundState, true);
+    saveRound(fresh);
+    syncSessionFromRound(fresh);
+    renderQuiz();
+    toast('已换一批，重新随机排列');
   }
 
   /* ---------------- 判定 ---------------- */
@@ -213,6 +396,13 @@
       DB.markWrong(q); /* 答错自动进本科错题本（连对清零、曾掌握的重新激活） */
     }
     S.judged = true;
+    if (S.roundState) {
+      /* 批次进度即时落盘：刷新后续做不会重复计分；错题本仍按题记录 */
+      S.roundState.correct = S.correct;
+      S.roundState.wrong = S.wrong;
+      S.roundState.answeredCurrent = true;
+      saveRound(S.roundState);
+    }
     return correct;
   }
   function correctAnswerText(q) {
@@ -253,15 +443,23 @@
       esc(q.pageNote || 'AI 依书页内容改写命题，尚未逐题人工抽检') + '">' + esc(txt) + '</span>';
   }
   function renderQuiz() {
-    if (!S || !S.queue.length) { location.hash = '#/'; return; }
+    if (!S || !S.currentId) { location.hash = '#/'; return; }
+    if (S.completed) { renderSummary(); return; }
     document.body.classList.add('in-quiz');
     var v = $('#view');
-    var q = questionById(S.queue[S.idx]);
-    if (!q) { v.innerHTML = '<div class="empty">题目数据缺失（' + esc(S.queue[S.idx]) + '）</div>'; return; }
+    var q = questionById(S.currentId);
+    if (!q) { v.innerHTML = '<div class="empty">题目数据缺失（' + esc(S.currentId) + '）</div>'; return; }
     var subj = subjectOf(S.subj);
-    var total = S.queue.length;
+    var total = S.total || 1;
+    var shown = Math.min(S.seen.length, total);
     var scopeTitle = S.origin === 'redo' ? '错题重做'
       : q.bookChapterTitle + (S.sectionId ? ' · ' + q.bookSectionTitle : ' · 整章随机');
+    var toolsHtml = S.origin === 'redo' ? '' :
+      '<div class="quiz-tools">' +
+        '<span class="quiz-batch">第 ' + (S.roundState ? S.roundState.round : 1) + ' 批 · 同批不重复</span>' +
+        '<button class="btn btn-ghost btn-sm" id="btnSwapOne" title="只替换当前这道题，不重复本批已出现的题">换一道</button>' +
+        '<button class="btn btn-ghost btn-sm" id="btnSwapBatch" title="结束当前这批，重新打乱全量题">换一批</button>' +
+      '</div>';
 
     var headChips =
       '<span class="chip chip-subj subj-' + q.subject + '">' + esc(subj.name) + '</span>' +
@@ -319,9 +517,10 @@
       '<div class="quiz-top">' +
         '<button class="btn btn-ghost" id="btnExit">‹ 退出</button>' +
         '<div class="quiz-scope">' + esc(scopeTitle) + '</div>' +
-        '<div class="quiz-progress">' + (S.idx + 1) + ' / ' + total + '</div>' +
+        '<div class="quiz-progress">' + shown + ' / ' + total + '</div>' +
       '</div>' +
-      '<div class="progress-bar"><div class="progress-fill" style="width:' + Math.round(S.idx * 100 / total) + '%"></div></div>' +
+      '<div class="progress-bar"><div class="progress-fill" style="width:' + Math.round((shown - 1) * 100 / total) + '%"></div></div>' +
+      toolsHtml +
       '<article class="qcard">' +
         '<header class="qcard-head">' + headChips + '</header>' +
         '<div class="qcard-stem">' + esc(q.stem.text) + '</div>' +
@@ -330,14 +529,21 @@
         '<div id="resultArea"></div>' +
         '<footer class="qcard-foot" id="qFoot" hidden>' +
           '<span class="foot-spacer"></span>' +
-          '<button class="btn btn-primary btn-lg" id="btnNext">' + (S.idx + 1 >= total ? '查看本轮小结' : '下一题') + '</button>' +
+          '<button class="btn btn-primary btn-lg" id="btnNext">' + (S.remaining.length ? '下一题' : '查看本轮小结') + '</button>' +
         '</footer>' +
       '</article>';
 
     $('#btnExit').addEventListener('click', function () {
       endSession();
-      location.hash = S.origin === 'redo' ? '#/wrong/' + S.subj : '#/c/' + S.subj;
+      DB.clearActiveQuiz();
+      var back = S.origin === 'redo' ? '#/wrong/' + S.subj : '#/c/' + S.subj;
+      S = null;
+      location.hash = back;
     });
+    var swapOneBtn = $('#btnSwapOne');
+    if (swapOneBtn) swapOneBtn.addEventListener('click', swapOne);
+    var swapBatchBtn = $('#btnSwapBatch');
+    if (swapBatchBtn) swapBatchBtn.addEventListener('click', swapBatch);
 
     var judged = false;
     function afterJudge(correct, givenKey) {
@@ -483,10 +689,20 @@
     }
 
     $('#btnNext').addEventListener('click', function () {
-      if (S.idx + 1 >= S.queue.length) { renderSummary(); return; }
-      S.idx++;
-      S.judged = false;
-      S.qStartAt = Date.now();
+      var st = S.roundState;
+      if (!st) { renderSummary(); return; } /* 错题重做：单题，答完即小结 */
+      if (!st.remaining.length) {
+        st.completed = true;
+        saveRound(st);
+        S.completed = true;
+        renderSummary();
+        return;
+      }
+      st.current = st.remaining.shift();
+      st.answeredCurrent = false;
+      if (st.seen.indexOf(st.current) < 0) st.seen.push(st.current);
+      saveRound(st);
+      syncSessionFromRound(st);
       renderQuiz();
     });
   }
@@ -494,7 +710,8 @@
   /* ---------------- 视图：本轮小结 ---------------- */
   function renderSummary() {
     endSession();
-    var total = S.queue.length;
+    DB.clearActiveQuiz(); /* 小结不是「进行中的答题」，刷新回首页，避免重复记一次会话 */
+    var total = S.correct + S.wrong; /* 本轮实际作答数（换题跳过的题不计） */
     var rate = total ? Math.round(S.correct * 100 / total) : 0;
     var v = $('#view');
     v.innerHTML =
@@ -514,7 +731,11 @@
         '</div>' +
       '</div>';
     var back = S.origin === 'redo' ? '#/wrong/' + S.subj : '#/c/' + S.subj;
-    $('#btnBack').addEventListener('click', function () { location.hash = back; });
+    $('#btnBack').addEventListener('click', function () {
+      DB.clearActiveQuiz();
+      S = null;
+      location.hash = back;
+    });
     var again = $('#btnAgain');
     if (again) again.addEventListener('click', function () { startPractice(S.subj, S.chapterId, S.sectionId); });
   }
@@ -845,7 +1066,8 @@
     var nav = $('#bottomNav');
     if (parts[0] === 'quiz') {
       if (nav) nav.style.display = 'none';
-      if (!S) { location.hash = '#/'; return; }
+      /* 刷新/重新打开 #/quiz：从本地批次进度恢复，续做而不是从头洗牌 */
+      if (!S && !restoreActiveQuiz()) { location.hash = '#/'; return; }
       renderQuiz();
       return;
     }
