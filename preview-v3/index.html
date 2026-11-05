@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#182535">
+  <meta name="description" content="七年级历史、地理、生物轻量练习。按章节选题，答后看解析，自动记录错题。">
+  <title>小四门 · 每天学一点</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="ui-v3.css">
+  <script defer src="content/app-data.js"></script>
+  <script defer src="core.js"></script>
+  <script defer src="storage.js"></script>
+  <script defer src="question-view.js"></script>
+  <script defer src="app.js"></script>
+  <script defer src="ui-v3-shell.js"></script>
+  <script defer src="public-preview.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="#" class="brand" aria-label="小四门，回到首页"><span class="brand-mark" aria-hidden="true">▤</span><span>小四门<span class="brand-subtitle">七年级随练</span></span></a>
+    <nav aria-label="主要导航"><button type="button" id="nav-study" class="nav-button active">练习</button><button type="button" id="nav-mistakes" class="nav-button">错题本 <span id="mistake-count" hidden></span></button></nav>
+  </header>
+  <main id="app" tabindex="-1"><p class="loading">正在打开你的练习本……</p></main>
+  <footer class="site-footer"><span>每天一点，慢慢变厉害。</span><button type="button" id="records-button" class="text-button">学习记录</button></footer>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="image-dialog" class="image-dialog"><div class="dialog-top"><p id="image-caption"></p><button id="close-image" type="button" class="button secondary">关闭图片</button></div><div class="image-scroll"><img id="zoom-image" alt=""></div><p class="muted">可使用双指缩放，或点击图片切换原始大小。</p></dialog>
+  <dialog id="records-dialog" class="records-dialog"><div class="dialog-top"><h2>学习记录</h2><button id="close-records" type="button" class="button secondary">关闭</button></div><p>记录保存在当前设备的浏览器中。换设备前，可以导出一份备份。</p><div id="records-summary"></div><div class="record-actions"><button id="export-records" class="button primary" type="button">导出学习记录</button><label class="button secondary file-label">恢复备份<input id="import-records" type="file" accept=".json,application/json"></label></div><p class="muted small">个人学习使用 · 原书图片版权归原权利人所有。</p></dialog>
+  <noscript>请使用开启 JavaScript 的浏览器打开本应用。</noscript>
+</body>
+</html>
