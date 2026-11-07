@@ -39,7 +39,7 @@
     controls.append(count,h('button',{class:'button secondary scope-all',type:'button',onClick:()=>start({subjectId,name:subject.name+' · 全科随机'},batchCount)},'全科随机练'));node.append(controls);
     const latest=new Map();state.attempts.forEach(a=>latest.set(a.questionId,a));
     D.units.filter(u=>u.subject_id===subjectId).forEach((unit,i)=>{
-      const all=D.questions.filter(q=>q.unit_id===unit.id),details=h('details',{class:'unit',open:i===0});
+      const all=D.questions.filter(q=>q.unit_id===unit.id),details=h('details',{class:'unit'});
       details.append(h('summary',{},h('span',{},unit.title,h('small',{},all.length+'道题 · 全部考点随机抽取'))));
       const content=h('div',{class:'unit-content'});
       unit.chapter_ids.forEach(cid=>{

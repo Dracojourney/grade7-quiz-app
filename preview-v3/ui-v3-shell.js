@@ -43,7 +43,7 @@
   const actions=el('div','v3-intro-actions');
   const chaptersButton=button('v3-small-action','章节练习',()=>{
     if(currentView!=='scope')openSubject(currentSubject);
-    const target=app.querySelector('.chapter-button');
+    const target=app.querySelector('.unit summary')||app.querySelector('.chapter-button');
     if(target){target.focus({preventScroll:true});target.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});}
   });chaptersButton.prepend(icon('history'));
   const mistakesButton=button('v3-small-action','错题回顾',openMistakes);mistakesButton.prepend(icon('mistakes'));actions.append(chaptersButton,mistakesButton);

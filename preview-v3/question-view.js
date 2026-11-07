@@ -23,6 +23,10 @@
     if(q.type==='ordering')return q.answer.map(id=>q.interaction.items.find(o=>o.id===id)?.text||id).join(' → ');
     return Array.isArray(q.answer)?q.answer.join('；'):String(q.answer);
   }
+  function attemptAnswerText(q,attempt){
+    if(q.quick_review_conversion?.original_type==='fill_blank' && Array.isArray(attempt.response))return attempt.response.join('；');
+    return answerText({...q,answer:attempt.response});
+  }
   function renderQuestion(container,q,callbacks){
     let locked=false,revealed=false,response=null, selectedLeft=null;
     const isSelf=StudyCore.selfCheck(q);
@@ -93,12 +97,13 @@
       locked=true;submit.hidden=true;inputZone.querySelectorAll('button,input,select').forEach(el=>el.disabled=true);
       feedback.hidden=false;const mastered=attempt.correct===null?attempt.selfAssessed:attempt.correct;
       feedback.className='feedback '+(mastered?'correct':'incorrect');
-      const own=attempt.correct===null?null:h('p',{class:'your-answer'},'你的答案：'+answerText({...q,answer:attempt.response}));
+      const legacyFill=q.quick_review_conversion?.original_type==='fill_blank' && Array.isArray(attempt.response);
+      const own=attempt.correct===null?null:h('div',{},legacyFill?h('p',{class:'answer-caption'},'保留上次填空作答记录；本题现已改为点击作答。原题：'+q.quick_review_conversion.original_prompt):null,h('p',{class:'your-answer'},(legacyFill?'上次填空答案：':'你的答案：')+attemptAnswerText(q,attempt)));
       feedback.replaceChildren(h('p',{class:'feedback-title'},attempt.correct===null?(mastered?'已记为掌握':'已经加入待练习'):(mastered?'✓ 答对了':'再看一下，你会记得更牢')),
         own,reference(),sourceDetails(),h('button',{class:'button primary wide',type:'button',onClick:callbacks.onNext},callbacks.isLast?'看看这次成果':'下一题'));
     }
     rootNode.append(inputZone,submit,feedback);container.replaceChildren(rootNode);
     return{showFeedback,lock(){locked=true;ready();},destroy(){container.replaceChildren();}};
   }
-  root.StudyUI={h,renderQuestion,answerText};
+  root.StudyUI={h,renderQuestion,answerText,attemptAnswerText};
 })(window);
